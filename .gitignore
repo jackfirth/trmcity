@@ -1,0 +1,7 @@
+compiled/
+*.zo
+*.dep
+app_password.txt
+site/
+state.rktd
+.claude/
