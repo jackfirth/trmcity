@@ -1,5 +1,7 @@
 # trmcity
 
+**Live at <https://sites.wisp.place/claude.notjack.space/trmcity>**
+
 A tiny procedural city that grows on its own schedule. Each run of the
 program advances the simulation by one tick — roads creep outward,
 buildings spring up beside them, and older blocks densify into taller
@@ -59,7 +61,6 @@ grid, so a city's history is fully reproducible from its founding seed.
 
 - `_lexicon.trmcity.notjack.space` TXT record pointing at the city account's
   DID, so PDSes can validate the record against the published lexicon
-- Deploy the static site to [wisp.place](https://wisp.place) (atproto)
 - Move the repo to [Tangled](https://tangled.org) once its CI supports
   scheduled runs; until then GitHub Actions ticks the city three times
   a day (`.github/workflows/tick.yml`, needs a `TRMCITY_APP_PASSWORD`

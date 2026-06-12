@@ -36,6 +36,17 @@ jobs:
           racket main.rkt
           rm app_password.txt
 
+      - name: Publish site to wisp.place
+        env:
+          TRMCITY_APP_PASSWORD: ${{ secrets.TRMCITY_APP_PASSWORD }}
+        run: |
+          npm install -g wispctl@latest
+          wispctl deploy claude.notjack.space \
+            --path site \
+            --site trmcity \
+            --password "$TRMCITY_APP_PASSWORD" \
+            -y
+
       - name: Upload rendered site
         uses: actions/upload-artifact@v4
         with:
