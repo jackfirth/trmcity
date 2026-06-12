@@ -71,6 +71,7 @@
   (save-city! st)
   (write-site! st site-dir)
   (render-city st (build-path site-dir "city.png"))
+  (render-city-eink st (build-path site-dir "trmnl.png"))
   (printf "day ~a · population ~a · ~a buildings · ~a roads\n"
           (city-state-tick st)
           (city-population st)
