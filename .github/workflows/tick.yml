@@ -26,7 +26,7 @@ jobs:
           version: "9.0"
 
       - name: Install dependencies
-        run: raco pkg install --batch --auto draw-lib
+        run: raco pkg install --batch --auto draw-lib rackunit-lib
 
       - name: Run one simulation tick
         env:
