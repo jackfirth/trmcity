@@ -23,19 +23,89 @@
 (define (random-pick lst)
   (and (pair? lst) (list-ref lst (random (length lst)))))
 
+;; The city stops sprawling as its footprint approaches this fraction
+;; of the land; growth continues vertically through upgrades. Combined
+;; with urban churn this caps the city at a living equilibrium that
+;; always leaves room for the landscape.
+(define city-footprint-target 0.62)
+
 (define (advance-city! st)
   (set-city-state-tick! st (add1 (city-state-tick st)))
   (parameterize ([current-pseudo-random-generator (city-state-rng st)])
     (define building-count (length (tiles-matching st building?)))
+    (define road-count (length (tiles-matching st road?)))
+    (define land-count
+      (- (* (city-state-width st) (city-state-height st))
+         (length (tiles-matching st water?))))
+    ;; Demand for new land falls to zero as the footprint nears the
+    ;; target fraction.
+    (define footprint (/ (+ building-count road-count) (exact->inexact land-count)))
+    (define demand (max 0.0 (- 1.0 (/ footprint city-footprint-target))))
     ;; Growth speeds up gently as the city matures, capped so a large
     ;; city still changes at a watchable pace.
     (define iterations (min 40 (+ 10 (quotient building-count 8))))
     (for ([_ (in-range iterations)])
       (define roll (random 100))
       (cond
-        [(< roll 35) (try-extend-road! st)]
-        [(< roll 75) (try-spawn-building! st)]
-        [else (try-upgrade-building! st)]))))
+        [(< roll 35) (when (< (random) demand) (try-extend-road! st))]
+        [(< roll 75) (when (< (random) demand) (try-spawn-building! st))]
+        [else (try-upgrade-building! st)]))
+    (advance-nature! st)
+    (renew-city! st)))
+
+;; Urban churn, so the city saturates into a living equilibrium
+;; instead of paving every last tile: fringe buildings occasionally
+;; get demolished and roads serving nothing get reclaimed.
+(define (renew-city! st)
+  (define building-pos (random-pick (tiles-matching st building?)))
+  (when building-pos
+    (match-define (cons x y) building-pos)
+    (when (and (= (building-level (tile-ref st x y)) 1)
+               (< (random 100) 30))
+      (tile-set! st x y 'grass)))
+  (define road-pos (random-pick (tiles-matching st road?)))
+  (when road-pos
+    (match-define (cons x y) road-pos)
+    (define serves-buildings?
+      (for/or ([c (in-list (neighbor-coords st x y))])
+        (building? (tile-ref st (car c) (cdr c)))))
+    (when (and (not serves-buildings?) (< (random 100) 20))
+      (tile-set! st x y 'grass))))
+
+;; The landscape drifts too: forests creep outward at their edges,
+;; lone saplings colonize open grass, and old trees die back. Interior
+;; trees have nowhere to spread but still die, so dense woods slowly
+;; thin into clearings that later refill — the forests wander instead
+;; of sitting frozen.
+(define (advance-nature! st)
+  ;; Seed colonization: rarely, a sapling takes root on open grass.
+  (when (< (random 100) 8)
+    (define pos (random-pick (tiles-matching st grass?)))
+    (when pos
+      (tile-set! st (car pos) (cdr pos) 'tree)))
+  ;; Spread: forest edges claim adjacent grass.
+  (for ([_ (in-range 3)])
+    (define pos (random-pick (tiles-matching st tree?)))
+    (when pos
+      (match-define (cons dx dy) (random-pick orthogonal-directions))
+      (define nx (+ (car pos) dx))
+      (define ny (+ (cdr pos) dy))
+      (when (and (in-bounds? st nx ny)
+                 (grass? (tile-ref st nx ny))
+                 (< (random 100) 60))
+        (tile-set! st nx ny 'tree))))
+  ;; Dieback: crowded trees die much more readily than isolated ones,
+  ;; so dense woods self-thin while lone trees and small groves
+  ;; persist — forests can't spiral into extinction or takeover.
+  (for ([_ (in-range 3)])
+    (define pos (random-pick (tiles-matching st tree?)))
+    (when pos
+      (match-define (cons x y) pos)
+      (define crowding
+        (for/sum ([c (in-list (neighbor-coords-8 st x y))])
+          (if (tree? (tile-ref st (car c) (cdr c))) 1 0)))
+      (when (< (random 100) (+ 10 (* 11 crowding)))
+        (tile-set! st x y 'grass)))))
 
 ;; Extends the road network by one tile from a random existing road.
 ;; Requiring the new tile to touch exactly one existing road keeps
@@ -80,6 +150,7 @@
         (tile-set! st nx ny 'road)))))
 
 ;; Puts a small new building on a buildable tile next to a road.
+;; Wooded lots are half as attractive as open grass.
 (define (try-spawn-building! st)
   (define road-pos (random-pick (tiles-matching st road?)))
   (when road-pos
@@ -88,7 +159,8 @@
     (define nx (+ x dx))
     (define ny (+ y dy))
     (when (and (in-bounds? st nx ny)
-               (buildable? (tile-ref st nx ny)))
+               (buildable? (tile-ref st nx ny))
+               (or (grass? (tile-ref st nx ny)) (< (random 100) 50)))
       (tile-set! st nx ny (make-building 1 (random building-variant-count))))))
 
 ;; Levels up a random building, with odds weighted by how built-up its
@@ -130,4 +202,15 @@
       (define water-before (tiles-matching st2 water?))
       (for ([_ (in-range 50)])
         (advance-city! st2))
-      (check-equal? (tiles-matching st2 water?) water-before))))
+      (check-equal? (tiles-matching st2 water?) water-before))
+    (test-case "forests drift but neither vanish nor take over"
+      (define st3 (generate-world 32 32 42))
+      (define trees-before (tiles-matching st3 tree?))
+      (define land-count
+        (- (* 32 32) (length (tiles-matching st3 water?))))
+      (for ([_ (in-range 100)])
+        (advance-city! st3))
+      (define trees-after (tiles-matching st3 tree?))
+      (check-true (pair? trees-after))
+      (check-true (< (length trees-after) (quotient (* land-count 2) 3)))
+      (check-not-equal? trees-after trees-before))))

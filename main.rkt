@@ -21,8 +21,8 @@
          "private/state.rkt"
          "private/terrain.rkt")
 
-(define world-width 64)
-(define world-height 64)
+(define world-width 32)
+(define world-height 32)
 (define city-collection "space.notjack.trmcity.map")
 (define city-rkey "self")
 

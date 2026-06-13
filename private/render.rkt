@@ -198,11 +198,10 @@
 ;;; E-ink renderer: an 800×480 high-contrast variant sized exactly for
 ;;; a TRMNL display. Drawn in a near-1-bit style — white ground, black
 ;;; roads and trees, outlined buildings, gray water left for the
-;;; display's dithering — so it survives grayscale conversion. Smaller
-;;; tiles (12×6) let the whole 64×64 map fit the panel.
+;;; display's dithering — so it survives grayscale conversion. The tile
+;;; size adapts to the grid so any map fills the panel: a 64×64 map
+;;; gets 12×6 tiles, a 32×32 map gets 24×12.
 
-(define eink-half-w 6)
-(define eink-half-h 3)
 (define eink-width 800)
 (define eink-height 480)
 (define eink-margin-top 60)
@@ -211,15 +210,21 @@
 (define eink-black (make-color 0 0 0))
 (define eink-gray (make-color 150 150 150))
 
-(define (eink-building-height level hash)
+;; The half-tile-width (s) that fits the map into the panel, kept even
+;; so the half-height s/2 stays integral.
+(define (eink-tile-scale w h)
+  (max 2 (* 2 (quotient (quotient 768 (+ w h)) 2))))
+
+(define (eink-building-height s level hash)
   (match level
-    [1 (+ 6 (modulo hash 2))]
-    [2 (+ 11 (modulo hash 3))]
-    [3 (+ 17 (modulo hash 4))]))
+    [1 (+ s (modulo hash (max 2 (quotient s 4))))]
+    [2 (+ (* 2 s) -1 (modulo hash (max 2 (quotient s 3))))]
+    [3 (+ (* 3 s) -2 (modulo hash (max 3 (quotient s 2))))]))
 
 (define (render-city-eink st path)
   (define w (city-state-width st))
   (define h (city-state-height st))
+  (define s (eink-tile-scale w h))
   (define bmp (make-bitmap eink-width eink-height))
   (define dc (new bitmap-dc% [bitmap bmp]))
   (send dc set-smoothing 'unsmoothed)
@@ -229,34 +234,34 @@
   (define origin-x (quotient eink-width 2))
   (for ([diag (in-range (+ w h -1))])
     (for ([x (in-range (max 0 (- diag (sub1 h))) (min w (add1 diag)))])
-      (draw-eink-tile dc st x (- diag x) origin-x eink-margin-top)))
+      (draw-eink-tile dc st s x (- diag x) origin-x eink-margin-top)))
   (send bmp save-file (if (path? path) path (string->path path)) 'png))
 
-(define (draw-eink-tile dc st x y origin-x origin-y)
-  (define sx (+ origin-x (* eink-half-w (- x y))))
-  (define sy (+ origin-y (* eink-half-h (+ x y))))
+(define (draw-eink-tile dc st s x y origin-x origin-y)
+  (define sx (+ origin-x (* s (- x y))))
+  (define sy (+ origin-y (* (quotient s 2) (+ x y))))
   (define tile (tile-ref st x y))
   ;; Grass tiles are left as bare background: the white world reads
   ;; cleanly on e-ink, and everything else supplies the contrast.
   (cond
-    [(water? tile) (draw-eink-water dc st x y sx sy)]
-    [(tree? tile) (draw-eink-tree dc x y sx sy)]
-    [(road? tile) (draw-eink-road dc sx sy)]
-    [(building? tile) (draw-eink-building dc tile x y sx sy)]))
+    [(water? tile) (draw-eink-water dc st s x y sx sy)]
+    [(tree? tile) (draw-eink-tree dc s x y sx sy)]
+    [(road? tile) (draw-eink-road dc s sx sy)]
+    [(building? tile) (draw-eink-building dc s tile x y sx sy)]))
 
-(define (eink-diamond-points sx sy)
+(define (eink-diamond-points s sx sy)
   (list (cons sx sy)
-        (cons (+ sx eink-half-w) (+ sy eink-half-h))
-        (cons sx (+ sy (* 2 eink-half-h)))
-        (cons (- sx eink-half-w) (+ sy eink-half-h))))
+        (cons (+ sx s) (+ sy (quotient s 2)))
+        (cons sx (+ sy s))
+        (cons (- sx s) (+ sy (quotient s 2)))))
 
 ;; Gray fill (dithered to texture by the display), with a black
 ;; coastline along any edge bordering land.
-(define (draw-eink-water dc st x y sx sy)
+(define (draw-eink-water dc st s x y sx sy)
   (send dc set-pen "black" 0 'transparent)
   (send dc set-brush eink-gray 'solid)
-  (send dc draw-polygon (eink-diamond-points sx sy))
-  (match-define (list top right bottom left) (eink-diamond-points sx sy))
+  (send dc draw-polygon (eink-diamond-points s sx sy))
+  (match-define (list top right bottom left) (eink-diamond-points s sx sy))
   (define (land? dx dy)
     (and (in-bounds? st (+ x dx) (+ y dy))
          (not (water? (tile-ref st (+ x dx) (+ y dy))))))
@@ -269,33 +274,34 @@
   (when (land? 0 -1) (edge top right))
   (send dc set-pen "black" 0 'transparent))
 
-(define (draw-eink-tree dc x y sx sy)
+(define (draw-eink-tree dc s x y sx sy)
   (define cx sx)
-  (define cy (+ sy eink-half-h))
-  (define top (- cy 7 (modulo (tile-hash x y) 3)))
+  (define cy (+ sy (quotient s 2)))
+  (define top (- cy s 1 (modulo (tile-hash x y) (max 2 (quotient s 2)))))
   (send dc set-pen "black" 0 'transparent)
   (send dc set-brush eink-black 'solid)
   (send dc draw-polygon
         (list (cons cx top)
-              (cons (+ cx 3) (- cy 1))
-              (cons (- cx 3) (- cy 1)))))
+              (cons (+ cx (quotient s 2)) (- cy 1))
+              (cons (- cx (quotient s 2)) (- cy 1)))))
 
-(define (draw-eink-road dc sx sy)
+(define (draw-eink-road dc s sx sy)
   (send dc set-pen "black" 0 'transparent)
   (send dc set-brush eink-black 'solid)
-  (send dc draw-polygon (eink-diamond-points sx sy)))
+  (send dc draw-polygon (eink-diamond-points s sx sy)))
 
-(define (draw-eink-building dc tile x y sx sy)
-  (define height (eink-building-height (building-level tile) (tile-hash x y)))
+(define (draw-eink-building dc s tile x y sx sy)
+  (define height (eink-building-height s (building-level tile) (tile-hash x y)))
   ;; Inset footprint corners, as in the color renderer.
+  (define inset (max 1 (quotient s 6)))
   (define top-x sx)
-  (define top-y (+ sy 1))
-  (define right-x (+ sx eink-half-w -1))
-  (define right-y (+ sy eink-half-h))
+  (define top-y (+ sy (quotient inset 2) 1))
+  (define right-x (+ sx s (- inset)))
+  (define right-y (+ sy (quotient s 2)))
   (define bottom-x sx)
-  (define bottom-y (+ sy (* 2 eink-half-h) -1))
-  (define left-x (- sx eink-half-w -1))
-  (define left-y (+ sy eink-half-h))
+  (define bottom-y (+ sy s (- (quotient inset 2)) -1))
+  (define left-x (- sx s (- inset)))
+  (define left-y (+ sy (quotient s 2)))
   (send dc set-pen eink-black 1 'solid)
   ;; Southwest face: white, outlined.
   (send dc set-brush eink-white 'solid)
