@@ -14,12 +14,12 @@
 (provide render-city
          render-city-eink)
 
-(define half-tile-w 8)
-(define half-tile-h 4)
+(define half-tile-w 16)
+(define half-tile-h 8)
 (define tile-h (* 2 half-tile-h))
 (define margin-x 16)
-(define margin-top 48)
-(define margin-bottom 24)
+(define margin-top 96)
+(define margin-bottom 48)
 
 ;; Deterministic per-tile variation, so the map doesn't shimmer
 ;; between renders.
@@ -85,26 +85,31 @@
   (define cx sx)
   (define cy (+ sy half-tile-h))
   (fill dc trunk-color)
-  (send dc draw-rectangle (- cx 1) (- cy 3) 2 4)
+  (send dc draw-rectangle (- cx 2) (- cy 7) 4 8)
   (cond
     [(even? (tile-hash x y))
      (fill dc canopy-color)
-     (send dc draw-ellipse (- cx 4) (- cy 11) 8 8)
+     (send dc draw-ellipse (- cx 8) (- cy 23) 16 16)
      (fill dc canopy-light-color)
-     (send dc draw-ellipse (- cx 3) (- cy 10) 5 5)]
+     (send dc draw-ellipse (- cx 6) (- cy 21) 10 10)]
     [else
      (fill dc pine-color)
      (send dc draw-polygon
-           (list (cons cx (- cy 13))
-                 (cons (+ cx 4) (- cy 3))
-                 (cons (- cx 4) (- cy 3))))]))
+           (list (cons cx (- cy 26))
+                 (cons (+ cx 8) (- cy 6))
+                 (cons (- cx 8) (- cy 6))))
+     (fill dc canopy-light-color)
+     (send dc draw-polygon
+           (list (cons cx (- cy 26))
+                 (cons (- cx 4) (- cy 16))
+                 (cons cx (- cy 16))))]))
 
 (define (draw-road dc st x y sx sy)
   (draw-diamond dc sx sy road-color)
   ;; Faint lane markings reaching toward each connected neighbor.
   (define cx sx)
   (define cy (+ sy half-tile-h))
-  (send dc set-pen road-line-color 1 'solid)
+  (send dc set-pen road-line-color 2 'solid)
   (for ([d (in-list '((1 . 0) (-1 . 0) (0 . 1) (0 . -1)))])
     (define nx (+ x (car d)))
     (define ny (+ y (cdr d)))
@@ -117,9 +122,9 @@
 
 (define (building-height level hash)
   (match level
-    [1 (+ 9 (modulo hash 3))]
-    [2 (+ 16 (modulo hash 5))]
-    [3 (+ 26 (modulo hash 7))]))
+    [1 (+ 18 (modulo hash 5))]
+    [2 (+ 32 (modulo hash 9))]
+    [3 (+ 52 (modulo hash 13))]))
 
 (define (draw-building dc tile x y sx sy)
   (draw-diamond dc sx sy pavement-color)
@@ -132,12 +137,12 @@
   ;; diamond so a strip of pavement shows and neighboring buildings
   ;; don't fuse into one mass.
   (define top-x sx)
-  (define top-y (+ sy 1))
-  (define right-x (+ sx half-tile-w -2))
+  (define top-y (+ sy 2))
+  (define right-x (+ sx half-tile-w -4))
   (define right-y (+ sy half-tile-h))
   (define bottom-x sx)
-  (define bottom-y (+ sy tile-h -1))
-  (define left-x (- sx half-tile-w -2))
+  (define bottom-y (+ sy tile-h -2))
+  (define left-x (- sx half-tile-w -4))
   (define left-y (+ sy half-tile-h))
   ;; Southwest face (toward the light).
   (fill dc wall-light)
@@ -160,27 +165,33 @@
               (cons right-x (- right-y height))
               (cons bottom-x (- bottom-y height))
               (cons left-x (- left-y height))))
-  (draw-windows dc x y height left-x left-y bottom-x bottom-y right-x right-y))
+  (draw-windows dc x y height left-x left-y bottom-x bottom-y right-x right-y)
+  ;; Ground-floor door on the sunlit face of small buildings.
+  (when (= level 1)
+    (fill dc trunk-color)
+    (define px (/ (+ left-x bottom-x) 2))
+    (define py (/ (+ left-y bottom-y) 2))
+    (send dc draw-rectangle (- px 2) (- py 9) 5 8)))
 
-;; Small window rectangles on both visible faces, in rows every few
-;; pixels of building height. Some are lit, deterministically.
+;; Window rectangles on both visible faces, in rows every few pixels
+;; of building height. Some are lit, deterministically.
 (define (draw-windows dc x y height left-x left-y bottom-x bottom-y right-x right-y)
   (for ([row (in-naturals 1)]
-        #:break (> (+ (* 6 row) 4) height))
-    (define dy (* 6 row))
-    (for ([t (in-list '(0.35 0.7))]
+        #:break (> (+ (* 11 row) 7) height))
+    (define dy (* 11 row))
+    (for ([t (in-list '(0.25 0.5 0.75))]
           [column (in-naturals)])
       ;; A point t of the way along each face's base edge, lifted by dy.
       (define lit? (even? (+ (tile-hash x y) row column (modulo x 3))))
       (fill dc (if lit? window-lit-color window-dark-color))
       (define lx (+ left-x (* t (- bottom-x left-x))))
       (define ly (+ left-y (* t (- bottom-y left-y))))
-      (send dc draw-rectangle (- lx 1) (- ly dy 1) 2 3)
+      (send dc draw-rectangle (- lx 1) (- ly dy 3) 3 5)
       (define rx (+ bottom-x (* t (- right-x bottom-x))))
       (define ry (+ bottom-y (* t (- right-y bottom-y))))
       (define lit2? (odd? (+ (tile-hash x y) row column (modulo y 3))))
       (fill dc (if lit2? window-lit-color window-dark-color))
-      (send dc draw-rectangle (- rx 1) (- ry dy 1) 2 3))))
+      (send dc draw-rectangle (- rx 1) (- ry dy 3) 3 5))))
 
 (define (draw-tile dc st x y origin-x origin-y)
   (define sx (+ origin-x (* half-tile-w (- x y))))

@@ -98,7 +98,7 @@ h1 {
 }
 
 .city {
-  width: min(100%, 1088px);
+  width: min(100%, 1056px);
   image-rendering: pixelated;
   border-radius: 6px;
 }
