@@ -107,12 +107,71 @@
       (when (< (random 100) (+ 10 (* 11 crowding)))
         (tile-set! st x y 'grass)))))
 
+;; A 2x2 block of road reads as a parking lot, and a single-tile S/Z
+;; zigzag (a corner that immediately re-corners with no straight run
+;; between the turns) reads as a paving glitch rather than a street.
+;; Multi-tile S-bends have a straight run between their corners and
+;; don't match either shape, so they're left alone. Checked against
+;; every rotation and mirror of the zigzag so bends in any direction
+;; are caught.
+(define zigzag-road-cells '((0 . 0) (0 . 1) (1 . 1) (1 . 2)))
+(define zigzag-empty-cells '((1 . 0) (0 . 2)))
+
+(define (rotate-offset c)
+  (cons (cdr c) (- (car c))))
+
+(define (flip-offset c)
+  (cons (- (car c)) (cdr c)))
+
+(define (offset-orientations cells)
+  (for*/list ([flip? (in-list '(#f #t))]
+              [rotations (in-range 4)])
+    (for/fold ([c (if flip? (map flip-offset cells) cells)])
+              ([_ (in-range rotations)])
+      (map rotate-offset c))))
+
+(define zigzag-orientations
+  (map cons (offset-orientations zigzag-road-cells)
+       (offset-orientations zigzag-empty-cells)))
+
+(define (creates-road-square? st x y)
+  (for*/or ([bx (in-list (list (sub1 x) x))]
+            [by (in-list (list (sub1 y) y))])
+    (for*/and ([dx (in-list '(0 1))]
+               [dy (in-list '(0 1))])
+      (define cx (+ bx dx))
+      (define cy (+ by dy))
+      (or (and (= cx x) (= cy y))
+          (and (in-bounds? st cx cy) (road? (tile-ref st cx cy)))))))
+
+(define (creates-road-zigzag? st x y)
+  (for/or ([orient (in-list zigzag-orientations)])
+    (match-define (cons road-cells empty-cells) orient)
+    (for/or ([anchor (in-list road-cells)])
+      (define ox (- x (car anchor)))
+      (define oy (- y (cdr anchor)))
+      (and (for/and ([c (in-list road-cells)])
+             (define cx (+ ox (car c)))
+             (define cy (+ oy (cdr c)))
+             (or (and (= cx x) (= cy y))
+                 (and (in-bounds? st cx cy) (road? (tile-ref st cx cy)))))
+           (for/and ([c (in-list empty-cells)])
+             (define cx (+ ox (car c)))
+             (define cy (+ oy (cdr c)))
+             (or (not (in-bounds? st cx cy))
+                 (not (road? (tile-ref st cx cy)))))))))
+
+(define (bad-road-shape? st x y)
+  (or (creates-road-square? st x y)
+      (creates-road-zigzag? st x y)))
+
 ;; Extends the road network by one tile from a random existing road.
 ;; Requiring the new tile to touch exactly one existing road keeps
 ;; streets from clumping into solid pavement; the occasional two-road
-;; exception lets loops form. Small buildings can be bulldozed for the
-;; road to pass through — otherwise new buildings encircle the network
-;; and growth deadlocks.
+;; exception lets loops form, but never into a parking-lot square or a
+;; single-tile zigzag. Small buildings can be bulldozed for the road
+;; to pass through — otherwise new buildings encircle the network and
+;; growth deadlocks.
 (define (try-extend-road! st)
   (define road-pos (random-pick (tiles-matching st road?)))
   (when road-pos
@@ -126,7 +185,8 @@
                  (and (building? tile) (= (building-level tile) 1))))
            (let ([roads (road-neighbor-count st nx ny)])
              (or (= roads 1)
-                 (and (= roads 2) (< (random 100) 15))))))
+                 (and (= roads 2) (< (random 100) 15))))
+           (not (bad-road-shape? st nx ny))))
     ;; A direction continues a straight street when the tile on the
     ;; opposite side is already road.
     (define (straight? d)
@@ -180,6 +240,42 @@
                                 (building-variant tile))))))
 
 (module+ test
+  (test-case "bad-road-shape?"
+    (define (grid-state width height road-coords)
+      (define st (city-state 0 width height
+                             (make-vector (* width height) 'grass)
+                             (make-pseudo-random-generator)))
+      (for ([c (in-list road-coords)])
+        (tile-set! st (car c) (cdr c) 'road))
+      st)
+    (test-case "flags a tile that would complete a 2x2 square"
+      (define st (grid-state 2 2 '((0 . 0) (1 . 0) (0 . 1))))
+      (check-true (creates-road-square? st 1 1))
+      (check-false (creates-road-zigzag? st 1 1)))
+    (test-case "does not flag an ordinary corner"
+      (define st (grid-state 2 3 '((0 . 0) (0 . 1))))
+      (check-false (creates-road-square? st 1 1)))
+    (test-case "flags a tile that would complete a single-tile S-bend"
+      (define st (grid-state 2 3 '((0 . 0) (0 . 1) (1 . 1))))
+      (check-true (creates-road-zigzag? st 1 2))
+      (check-false (creates-road-square? st 1 2)))
+    (test-case "does not flag a multi-tile S-bend"
+      (define st (grid-state 3 3 '((0 . 0) (0 . 1) (1 . 1) (2 . 1))))
+      (check-false (creates-road-zigzag? st 2 2))
+      (check-false (creates-road-square? st 2 2))))
+
+  (test-case "advance-city! never produces parking-lot squares or single-tile zigzags"
+    (define st (generate-world 32 32 7))
+    (for ([_ (in-range 200)])
+      (advance-city! st))
+    (for* ([y (in-range 32)]
+           [x (in-range 32)]
+           #:when (road? (tile-ref st x y)))
+      (check-false (creates-road-square? st x y)
+                   (format "2x2 road square at ~a,~a" x y))
+      (check-false (creates-road-zigzag? st x y)
+                   (format "single-tile zigzag at ~a,~a" x y))))
+
   (test-case "advance-city!"
     (define st (generate-world 32 32 42))
     (for ([_ (in-range 50)])
